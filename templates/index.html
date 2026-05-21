@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Jira Changelog Extractor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;600;700&display=swap" rel="stylesheet" />
+<style>
+/* ── Reset & Tokens ────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0b0e14;
+  --surface:   #111520;
+  --card:      #161c2d;
+  --border:    #1f2a45;
+  --accent:    #3b82f6;
+  --accent2:   #6366f1;
+  --ok:        #22c55e;
+  --warn:      #f59e0b;
+  --err:       #ef4444;
+  --txt:       #e2e8f0;
+  --muted:     #64748b;
+  --mono:      'DM Mono', monospace;
+  --sans:      'Sora', sans-serif;
+}
+
+html, body { height: 100%; background: var(--bg); color: var(--txt); font-family: var(--sans); }
+
+body {
+  background-image:
+    radial-gradient(ellipse 80% 50% at 10% 0%, #1e3a5f22 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 90% 100%, #1e1b4b22 0%, transparent 60%);
+  min-height: 100vh;
+}
+
+/* ── Layout ────────────────────────────────────────── */
+.shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 20px 36px;
+  border-bottom: 1px solid var(--border);
+  background: #0d111a88;
+  backdrop-filter: blur(12px);
+  position: sticky; top: 0; z-index: 100;
+}
+
+.logo-area {
+  display: flex; align-items: center; gap: 12px;
+  flex: 0 0 auto;
+}
+
+.logo-box {
+  width: 44px; height: 44px;
+  border: 2px dashed var(--border);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 11px; text-align: center;
+  line-height: 1.2; cursor: pointer; transition: border-color .2s;
+  overflow: hidden; position: relative;
+}
+.logo-box:hover { border-color: var(--accent); }
+.logo-box img { width: 100%; height: 100%; object-fit: contain; }
+.logo-box span { pointer-events: none; font-family: var(--mono); font-size: 9px; color: var(--muted); }
+
+.app-title {
+  font-size: 15px; font-weight: 600; letter-spacing: .02em;
+  color: var(--txt);
+}
+.app-subtitle { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
+.user-chip {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--card); border: 1px solid var(--border);
+  padding: 6px 12px; border-radius: 999px;
+  font-size: 13px;
+}
+.user-chip img { width: 24px; height: 24px; border-radius: 50%; }
+.user-chip .name { font-weight: 600; }
+.user-chip .email { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+
+main {
+  padding: 40px 36px;
+  display: flex; flex-direction: column; gap: 28px;
+  max-width: 1200px; width: 100%; margin: 0 auto;
+}
+
+/* ── Cards ─────────────────────────────────────────── */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px 32px;
+}
+
+.card-title {
+  font-size: 12px; font-weight: 600; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--muted);
+  margin-bottom: 20px;
+  display: flex; align-items: center; gap: 8px;
+}
+.card-title .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent);
+}
+
+/* ── Form rows ─────────────────────────────────────── */
+.form-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+}
+.form-row.three { grid-template-columns: 1.2fr 1fr 1fr; }
+
+.field { display: flex; flex-direction: column; gap: 7px; }
+.field label {
+  font-size: 12px; font-weight: 600; color: var(--muted);
+  letter-spacing: .05em; text-transform: uppercase;
+  display: flex; align-items: center; gap: 6px;
+}
+
+.field input, .field select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  color: var(--txt);
+  font-family: var(--mono);
+  font-size: 13px;
+  outline: none;
+  transition: border-color .2s, box-shadow .2s;
+}
+.field input:focus, .field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px #3b82f618;
+}
+.field input[type="password"] { letter-spacing: .1em; }
+
+.field select option { background: var(--card); }
+
+/* ── Tooltip ────────────────────────────────────────── */
+.tooltip-wrap { position: relative; display: inline-flex; }
+.tooltip-icon {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--border); color: var(--muted);
+  font-size: 10px; font-weight: 700; font-family: var(--mono);
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: help;
+}
+.tooltip-box {
+  position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
+  background: #1a2236; border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px;
+  width: 300px; font-size: 12px; line-height: 1.7;
+  color: var(--txt); z-index: 200;
+  pointer-events: none; opacity: 0;
+  transition: opacity .15s;
+  font-family: var(--sans); letter-spacing: 0;
+}
+.tooltip-box ol { padding-left: 14px; }
+.tooltip-box ol li { margin-bottom: 4px; }
+.tooltip-box code {
+  background: var(--surface); border-radius: 4px;
+  padding: 1px 5px; font-family: var(--mono); font-size: 11px;
+  color: var(--accent);
+}
+.tooltip-wrap:hover .tooltip-box { opacity: 1; }
+
+/* ── Buttons ────────────────────────────────────────── */
+.btn-row { display: flex; gap: 12px; margin-top: 6px; }
+
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 11px 22px; border-radius: 8px; border: none;
+  font-family: var(--sans); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all .2s; outline: none;
+}
+.btn-primary {
+  background: var(--accent); color: #fff;
+}
+.btn-primary:hover { background: #2563eb; transform: translateY(-1px); }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+.btn-ghost {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { border-color: var(--accent); color: var(--txt); }
+.btn-ghost:disabled { opacity: .4; cursor: not-allowed; }
+
+.btn-ok { background: var(--ok); color: #fff; }
+.btn-ok:hover { background: #16a34a; transform: translateY(-1px); }
+.btn-ok:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+
+/* ── Status badge ───────────────────────────────────── */
+.conn-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-family: var(--mono); padding: 5px 10px;
+  border-radius: 6px;
+}
+.conn-badge.ok   { background: #16a34a22; color: var(--ok); border: 1px solid #16a34a44; }
+.conn-badge.err  { background: #ef444422; color: var(--err); border: 1px solid #ef444444; }
+.conn-badge.idle { background: var(--surface); color: var(--muted); border: 1px solid var(--border); }
+
+/* ── Progress area ──────────────────────────────────── */
+#progress-area { display: none; flex-direction: column; gap: 14px; }
+
+.phase-label {
+  font-size: 13px; font-family: var(--mono); color: var(--muted);
+  display: flex; align-items: center; gap: 8px;
+}
+.phase-label .spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.progress-track {
+  height: 6px; background: var(--surface);
+  border-radius: 999px; overflow: hidden;
+}
+.progress-bar {
+  height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transition: width .4s cubic-bezier(.4,0,.2,1);
+  width: 0%;
+}
+.progress-bar.indeterminate {
+  width: 40%; animation: slide 1.2s ease-in-out infinite;
+}
+@keyframes slide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.stat-row { display: flex; gap: 24px; }
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat .val { font-size: 22px; font-weight: 700; color: var(--txt); font-family: var(--mono); }
+.stat .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+
+/* ── Results ────────────────────────────────────────── */
+#results-area { display: none; flex-direction: column; gap: 16px; }
+
+.dl-row { display: flex; gap: 10px; align-items: center; }
+
+.table-wrap {
+  overflow: auto;
+  max-height: 480px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+}
+
+table {
+  width: 100%; border-collapse: collapse;
+  font-family: var(--mono); font-size: 12px;
+}
+thead th {
+  position: sticky; top: 0;
+  background: #0d1424; color: var(--muted);
+  padding: 10px 14px; text-align: left;
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+tbody tr {
+  border-bottom: 1px solid #1a2236;
+  transition: background .12s;
+}
+tbody tr:hover { background: #1a2236; }
+tbody td {
+  padding: 9px 14px; color: var(--txt);
+  max-width: 220px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+tbody td.mono { font-family: var(--mono); }
+.badge {
+  display: inline-block; padding: 2px 8px;
+  border-radius: 4px; font-size: 10px; font-weight: 600;
+  background: #3b82f622; color: var(--accent);
+}
+
+.no-data { text-align: center; padding: 48px; color: var(--muted); font-size: 13px; }
+
+/* ── Alerts ─────────────────────────────────────────── */
+.alert {
+  padding: 12px 16px; border-radius: 8px; font-size: 13px;
+  border: 1px solid; display: none;
+}
+.alert.err { background: #ef444411; border-color: #ef444433; color: #fca5a5; }
+.alert.ok  { background: #22c55e11; border-color: #22c55e33; color: #86efac; }
+
+/* ── Logo upload hint ────────────────────────────────── */
+#logo-input { display: none; }
+
+/* ── Empty state art ─────────────────────────────────── */
+.empty-art {
+  text-align: center; padding: 60px 20px;
+  color: var(--muted);
+}
+.empty-art svg { opacity: .18; margin-bottom: 16px; }
+.empty-art p { font-size: 13px; }
+
+/* ── Scrollbar ─────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<!-- ─── Header ──────────────────────────────────────── -->
+<header>
+  <div class="logo-area">
+    <div class="logo-box" id="logo-box" title="Clique para carregar logo">
+      <input type="file" id="logo-input" accept="image/*" />
+      <span id="logo-placeholder">LOGO<br/>AQUI</span>
+      <img id="logo-img" src="" alt="" style="display:none" />
+    </div>
+    <div>
+      <div class="app-title">Jira Changelog Extractor</div>
+      <div class="app-subtitle">EPR-Classification · Audit Trail</div>
+    </div>
+  </div>
+
+  <div class="user-chip" id="user-chip" style="display:none">
+    <img id="user-avatar" src="" alt="" />
+    <div>
+      <div class="name" id="user-name"></div>
+      <div class="email" id="user-email"></div>
+    </div>
+  </div>
+</header>
+
+<!-- ─── Main ─────────────────────────────────────────── -->
+<main>
+
+  <!-- Step 1: Conexão -->
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>01 · Conexão com o Jira</div>
+
+    <div class="form-row" style="margin-bottom:16px">
+      <div class="field">
+        <label>
+          Jira Host URL
+        </label>
+        <input id="host" type="text" placeholder="https://seu-jira.empresa.com" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>
+          Personal Access Token
+          <span class="tooltip-wrap">
+            <span class="tooltip-icon">?</span>
+            <span class="tooltip-box">
+              <strong>Como obter seu PAT:</strong><br/>
+              <ol>
+                <li>Acesse seu Jira e clique no seu <strong>avatar</strong> (canto superior direito).</li>
+                <li>Selecione <code>Profile</code> ou <code>Perfil</code>.</li>
+                <li>No menu lateral, clique em <code>Personal Access Tokens</code>.</li>
+                <li>Clique em <code>Create token</code>.</li>
+                <li>Dê um nome, defina a validade e clique em <code>Create</code>.</li>
+                <li>Copie o token gerado — ele não será exibido novamente.</li>
+              </ol>
+            </span>
+          </span>
+        </label>
+        <input id="pat" type="password" placeholder="••••••••••••••••••••" autocomplete="off" />
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-connect">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+        Conectar
+      </button>
+      <span class="conn-badge idle" id="conn-badge">⬤ &nbsp;desconectado</span>
+    </div>
+
+    <div class="alert err" id="conn-err"></div>
+  </div>
+
+  <!-- Step 2: Filtros -->
+  <div class="card" id="filter-card" style="opacity:.4; pointer-events:none; transition:opacity .3s">
+    <div class="card-title"><span class="dot" style="background:var(--accent2)"></span>02 · Filtros de Busca</div>
+
+    <div class="form-row three" style="margin-bottom:16px">
+      <div class="field">
+        <label>Projeto</label>
+        <select id="sel-project">
+          <option value="">— todos —</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>JQL customizado <span style="font-size:10px;color:var(--muted)">(opcional, sobrescreve)</span></label>
+        <input id="jql-custom" type="text" placeholder='project = "MYPROJ" AND status != Done' />
+      </div>
+      <div class="field">
+        <label>Campo monitorado</label>
+        <input id="field-name" type="text" value="EPR-Classification" />
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-search">
+        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        Extrair Changelog
+      </button>
+    </div>
+    <div class="alert err" id="search-err"></div>
+  </div>
+
+  <!-- Progress -->
+  <div class="card" id="prog-card" style="display:none">
+    <div class="card-title"><span class="dot" style="background:var(--warn)"></span>Processando…</div>
+    <div id="progress-area" style="display:flex">
+      <div class="stat-row">
+        <div class="stat"><div class="val" id="stat-found">0</div><div class="lbl">Issues encontradas</div></div>
+        <div class="stat"><div class="val" id="stat-total">—</div><div class="lbl">Total na query</div></div>
+        <div class="stat"><div class="val" id="stat-cl">0</div><div class="lbl">Changelogs lidos</div></div>
+        <div class="stat"><div class="val" id="stat-rows">0</div><div class="lbl">Registros extraídos</div></div>
+      </div>
+      <div class="phase-label"><span class="spinner"></span><span id="phase-txt">Buscando issues…</span></div>
+      <div class="progress-track"><div class="progress-bar indeterminate" id="pbar"></div></div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="card" id="results-card" style="display:none">
+    <div class="card-title"><span class="dot" style="background:var(--ok)"></span>03 · Resultados</div>
+    <div id="results-area" style="display:flex">
+      <div class="dl-row">
+        <span style="font-size:13px;color:var(--muted)">Download:</span>
+        <button class="btn btn-ghost" id="btn-csv">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          CSV
+        </button>
+        <button class="btn btn-ok" id="btn-xlsx">
+          <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Excel
+        </button>
+        <span id="row-count-label" style="font-family:var(--mono);font-size:12px;color:var(--muted);margin-left:8px"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="result-table">
+          <thead>
+            <tr>
+              <th>EPR ID</th><th>EPR Title</th><th>Status Atual</th>
+              <th>Responsável</th><th>Autor</th><th>Data</th>
+              <th>Campo</th><th>De</th><th>Para</th>
+            </tr>
+          </thead>
+          <tbody id="result-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</main>
+</div>
+
+<script>
+// ─── State ──────────────────────────────────────────────────────
+let connectedPat = "", connectedHost = "", currentJobId = null, pollTimer = null;
+
+// ─── Logo upload ────────────────────────────────────────────────
+document.getElementById("logo-box").addEventListener("click", () => {
+  document.getElementById("logo-input").click();
+});
+document.getElementById("logo-input").addEventListener("change", e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  document.getElementById("logo-img").src = url;
+  document.getElementById("logo-img").style.display = "block";
+  document.getElementById("logo-placeholder").style.display = "none";
+});
+
+// ─── Connect ────────────────────────────────────────────────────
+document.getElementById("btn-connect").addEventListener("click", async () => {
+  const pat  = document.getElementById("pat").value.trim();
+  const host = document.getElementById("host").value.trim();
+  const errEl = document.getElementById("conn-err");
+  errEl.style.display = "none";
+  if (!pat || !host) { showErr(errEl, "Preencha o Host e o PAT."); return; }
+
+  const btn = document.getElementById("btn-connect");
+  btn.disabled = true; btn.textContent = "Conectando…";
+
+  const res = await fetch("/api/connect", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({pat, host})
+  }).then(r => r.json()).catch(() => ({ok:false, error:"Erro de rede."}));
+
+  btn.disabled = false; btn.innerHTML = `<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg> Conectar`;
+
+  if (!res.ok) { showErr(errEl, res.error); setBadge("err", "❌ falha"); return; }
+
+  connectedPat = pat; connectedHost = host;
+  setBadge("ok", "✔ conectado");
+
+  // User chip
+  const u = res.user;
+  if (u) {
+    document.getElementById("user-name").textContent  = u.displayName;
+    document.getElementById("user-email").textContent = u.emailAddress;
+    if (u.avatarUrl) document.getElementById("user-avatar").src = u.avatarUrl;
+    document.getElementById("user-chip").style.display = "flex";
+  }
+
+  // Projects dropdown
+  const sel = document.getElementById("sel-project");
+  sel.innerHTML = '<option value="">— todos os projetos —</option>';
+  (res.projects || []).forEach(p => {
+    const o = document.createElement("option");
+    o.value = p.key; o.textContent = `${p.key} — ${p.name}`;
+    sel.appendChild(o);
+  });
+
+  // Unlock filters
+  const fc = document.getElementById("filter-card");
+  fc.style.opacity = "1"; fc.style.pointerEvents = "auto";
+});
+
+// ─── Search ─────────────────────────────────────────────────────
+document.getElementById("btn-search").addEventListener("click", async () => {
+  const errEl = document.getElementById("search-err");
+  errEl.style.display = "none";
+
+  const proj   = document.getElementById("sel-project").value;
+  const custom = document.getElementById("jql-custom").value.trim();
+  const field  = document.getElementById("field-name").value.trim();
+
+  // Build JQL
+  let jql = custom;
+  if (!jql) {
+    jql = proj ? `project = "${proj}"` : "ORDER BY created DESC";
+  }
+
+  // Update monitored field
+  // (sent via hidden; backend reads from body in future; for now hardcoded)
+
+  const res = await fetch("/api/start", {
+    method: "POST", headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({pat: connectedPat, host: connectedHost, jql})
+  }).then(r => r.json()).catch(() => ({ok:false, error:"Erro de rede."}));
+
+  if (!res.ok) { showErr(errEl, res.error); return; }
+
+  currentJobId = res.job_id;
+  document.getElementById("prog-card").style.display = "";
+  document.getElementById("results-card").style.display = "none";
+  document.getElementById("results-area").style.display = "none";
+  startPolling();
+});
+
+// ─── Polling ─────────────────────────────────────────────────────
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollProgress, 900);
+}
+
+async function pollProgress() {
+  if (!currentJobId) return;
+  const d = await fetch(`/api/progress/${currentJobId}`).then(r => r.json()).catch(() => null);
+  if (!d || !d.ok) return;
+
+  document.getElementById("stat-found").textContent = d.found;
+  document.getElementById("stat-total").textContent  = d.total || "—";
+  document.getElementById("stat-cl").textContent    = d.done_changelog;
+  document.getElementById("stat-rows").textContent  = d.row_count;
+
+  const pbar = document.getElementById("pbar");
+  const phaseTxt = document.getElementById("phase-txt");
+
+  if (d.phase === "issues") {
+    phaseTxt.textContent = "Buscando issues…";
+    pbar.classList.add("indeterminate");
+  } else if (d.phase === "changelog") {
+    phaseTxt.textContent = `Lendo changelogs… (${d.done_changelog} / ${d.total_changelog || d.found})`;
+    pbar.classList.remove("indeterminate");
+    const pct = d.total_changelog ? (d.done_changelog / d.total_changelog * 100) : 0;
+    pbar.style.width = pct + "%";
+  }
+
+  if (d.status === "done") {
+    clearInterval(pollTimer);
+    pbar.classList.remove("indeterminate");
+    pbar.style.width = "100%";
+    phaseTxt.textContent = "✔ Concluído!";
+    loadResults();
+  } else if (d.status === "error") {
+    clearInterval(pollTimer);
+    phaseTxt.textContent = "❌ Erro: " + d.error;
+  }
+}
+
+// ─── Load & render results ───────────────────────────────────────
+async function loadResults() {
+  const d = await fetch(`/api/results/${currentJobId}`).then(r => r.json());
+  if (!d.ok) return;
+
+  const tbody = document.getElementById("result-body");
+  tbody.innerHTML = "";
+  const rows = d.rows;
+
+  document.getElementById("row-count-label").textContent = `${rows.length} registro(s)`;
+
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="no-data">Nenhum registro de changelog encontrado para os filtros selecionados.</td></tr>`;
+  } else {
+    const cols = ["EPR ID","EPR Title","Current Status","Current Assignee","Author","Date","Field Changed","From","To"];
+    rows.forEach(row => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = cols.map(c => `<td title="${esc(row[c] || "")}">${esc(row[c] || "")}</td>`).join("");
+      tbody.appendChild(tr);
+    });
+  }
+
+  document.getElementById("results-card").style.display = "";
+  document.getElementById("results-area").style.display = "flex";
+
+  document.getElementById("btn-csv").onclick  = () => location.href = `/api/download/${currentJobId}/csv`;
+  document.getElementById("btn-xlsx").onclick = () => location.href = `/api/download/${currentJobId}/xlsx`;
+}
+
+// ─── Helpers ────────────────────────────────────────────────────
+function setBadge(type, txt) {
+  const el = document.getElementById("conn-badge");
+  el.className = "conn-badge " + type;
+  el.textContent = txt;
+}
+function showErr(el, msg) {
+  el.textContent = msg; el.style.display = "block"; el.className = "alert err";
+}
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+</script>
+</body>
+</html>
