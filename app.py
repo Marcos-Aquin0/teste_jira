@@ -17,8 +17,6 @@ REQUEST_TIMEOUT = 30
 # In-memory job store
 jobs = {}
 
-FIELDS_INCLUDE = {"EPR-Classification"}
-
 # ─── Jira helpers ────────────────────────────────────────────────────────────
 
 def make_session(pat: str) -> requests.Session:
@@ -118,9 +116,12 @@ def format_brazil_datetime(dt_str: str) -> str:
         return dt_str
 
 
-def get_changelog_rows(jira: requests.Session, host: str, issue_keys, progress_cb=None):
+def get_changelog_rows(jira: requests.Session, host: str, issue_keys, fields_include: set, job: dict, progress_cb=None):
     rows = []
+    all_fields_seen = set()   # for diagnostics when nothing matches
     total = len(issue_keys)
+    job["total_changelog"] = total
+
     for idx, key in enumerate(issue_keys):
         try:
             r = jira.get(
@@ -128,18 +129,29 @@ def get_changelog_rows(jira: requests.Session, host: str, issue_keys, progress_c
                 timeout=REQUEST_TIMEOUT,
             )
             if r.status_code != 200:
+                if progress_cb:
+                    progress_cb("changelog", idx + 1, total)
                 continue
             data = r.json()
-            fields = data.get("fields", {})
-            summary = fields.get("summary", "")
-            status = (fields.get("status") or {}).get("name", "")
-            assignee = (fields.get("assignee") or {}).get("displayName", "")
+            issue_fields = data.get("fields", {})
+            summary  = issue_fields.get("summary", "")
+            status   = (issue_fields.get("status") or {}).get("name", "")
+            assignee = (issue_fields.get("assignee") or {}).get("displayName", "")
+
             for history in data.get("changelog", {}).get("histories", []):
-                author = history.get("author", {}).get("displayName", "")
+                author  = history.get("author", {}).get("displayName", "")
                 created = format_brazil_datetime(history.get("created", ""))
                 for item in history.get("items", []):
-                    field = item.get("field", "")
-                    if field not in FIELDS_INCLUDE:
+                    field_name = item.get("field", "")
+                    all_fields_seen.add(field_name)
+                    # match case-insensitively and also try fieldId
+                    field_id = item.get("fieldId", "")
+                    matched = (
+                        field_name in fields_include
+                        or field_id in fields_include
+                        or field_name.lower() in {f.lower() for f in fields_include}
+                    )
+                    if not matched:
                         continue
                     rows.append({
                         "EPR ID": key,
@@ -148,27 +160,40 @@ def get_changelog_rows(jira: requests.Session, host: str, issue_keys, progress_c
                         "Current Assignee": assignee,
                         "Author": author,
                         "Date": created,
-                        "Field Changed": field,
-                        "From": item.get("fromString", ""),
-                        "To": item.get("toString", ""),
+                        "Field Changed": field_name,
+                        "From": item.get("fromString", "") or item.get("from", ""),
+                        "To":   item.get("toString",   "") or item.get("to",   ""),
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            job.setdefault("warnings", []).append(f"{key}: {e}")
+
+        job["done_changelog"] = idx + 1
+        job["row_count"]      = len(rows)
         if progress_cb:
             progress_cb("changelog", idx + 1, total)
+
+    job["fields_seen"] = sorted(all_fields_seen)
     return rows
 
 
 # ─── Background job ──────────────────────────────────────────────────────────
 
-def run_job(job_id, pat, host, jql):
+def run_job(job_id, pat, host, jql, field_name):
     job = jobs[job_id]
-    job["status"] = "running"
-    job["phase"] = "issues"
-    job["found"] = 0
-    job["total"] = 0
+    job["status"]         = "running"
+    job["phase"]          = "issues"
+    job["found"]          = 0
+    job["total"]          = 0
     job["done_changelog"] = 0
-    job["rows"] = []
+    job["total_changelog"]= 0
+    job["row_count"]      = 0
+    job["rows"]           = []
+    job["fields_seen"]    = []
+
+    # Support comma-separated list of field names
+    fields_include = {f.strip() for f in field_name.split(",") if f.strip()}
+    if not fields_include:
+        fields_include = {"EPR-Classification"}
 
     try:
         jira = make_session(pat)
@@ -183,16 +208,15 @@ def run_job(job_id, pat, host, jql):
         job["phase"] = "changelog"
 
         def progress_cl(phase, done, total):
-            job["done_changelog"] = done
-            job["total_changelog"] = total
+            pass  # job dict updated directly inside get_changelog_rows
 
-        rows = get_changelog_rows(jira, host, issue_keys, progress_cl)
-        job["rows"] = rows
+        rows = get_changelog_rows(jira, host, issue_keys, fields_include, job, progress_cl)
+        job["rows"]   = rows
         job["status"] = "done"
-        job["phase"] = "done"
+        job["phase"]  = "done"
     except Exception as e:
         job["status"] = "error"
-        job["error"] = str(e)
+        job["error"]  = str(e)
 
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
@@ -220,14 +244,15 @@ def api_connect():
 @app.route("/api/start", methods=["POST"])
 def api_start():
     data = request.json or {}
-    pat = data.get("pat", "").strip()
-    host = data.get("host", "").strip().rstrip("/")
-    jql = data.get("jql", "").strip()
+    pat        = data.get("pat", "").strip()
+    host       = data.get("host", "").strip().rstrip("/")
+    jql        = data.get("jql", "").strip()
+    field_name = data.get("field_name", "EPR-Classification").strip()
     if not pat or not host or not jql:
         return jsonify({"ok": False, "error": "Parâmetros incompletos."})
     job_id = str(uuid.uuid4())
     jobs[job_id] = {}
-    t = threading.Thread(target=run_job, args=(job_id, pat, host, jql), daemon=True)
+    t = threading.Thread(target=run_job, args=(job_id, pat, host, jql, field_name), daemon=True)
     t.start()
     return jsonify({"ok": True, "job_id": job_id})
 
@@ -238,15 +263,16 @@ def api_progress(job_id):
     if not job:
         return jsonify({"ok": False, "error": "Job não encontrado."})
     return jsonify({
-        "ok": True,
-        "status": job.get("status"),
-        "phase": job.get("phase"),
-        "found": job.get("found", 0),
-        "total": job.get("total", 0),
+        "ok":             True,
+        "status":         job.get("status"),
+        "phase":          job.get("phase"),
+        "found":          job.get("found", 0),
+        "total":          job.get("total", 0),
         "done_changelog": job.get("done_changelog", 0),
-        "total_changelog": job.get("total_changelog", 0),
-        "row_count": len(job.get("rows", [])),
-        "error": job.get("error"),
+        "total_changelog":job.get("total_changelog", 0),
+        "row_count":      job.get("row_count", 0),
+        "fields_seen":    job.get("fields_seen", []),
+        "error":          job.get("error"),
     })
 
 

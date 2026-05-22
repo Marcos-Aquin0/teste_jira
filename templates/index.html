@@ -549,9 +549,11 @@ document.getElementById("btn-search").addEventListener("click", async () => {
   // Update monitored field
   // (sent via hidden; backend reads from body in future; for now hardcoded)
 
+  const fieldName = document.getElementById("field-name").value.trim() || "EPR-Classification";
+
   const res = await fetch("/api/start", {
     method: "POST", headers: {"Content-Type":"application/json"},
-    body: JSON.stringify({pat: connectedPat, host: connectedHost, jql})
+    body: JSON.stringify({pat: connectedPat, host: connectedHost, jql, field_name: fieldName})
   }).then(r => r.json()).catch(() => ({ok:false, error:"Erro de rede."}));
 
   if (!res.ok) { showErr(errEl, res.error); return; }
@@ -576,7 +578,7 @@ async function pollProgress() {
 
   document.getElementById("stat-found").textContent = d.found;
   document.getElementById("stat-total").textContent  = d.total || "—";
-  document.getElementById("stat-cl").textContent    = d.done_changelog;
+  document.getElementById("stat-cl").textContent    = d.done_changelog + (d.total_changelog ? ` / ${d.total_changelog}` : "");
   document.getElementById("stat-rows").textContent  = d.row_count;
 
   const pbar = document.getElementById("pbar");
@@ -586,9 +588,11 @@ async function pollProgress() {
     phaseTxt.textContent = "Buscando issues…";
     pbar.classList.add("indeterminate");
   } else if (d.phase === "changelog") {
-    phaseTxt.textContent = `Lendo changelogs… (${d.done_changelog} / ${d.total_changelog || d.found})`;
+    const done  = d.done_changelog;
+    const total = d.total_changelog || d.found;
+    phaseTxt.textContent = `Lendo changelogs… ${done} / ${total} — ${d.row_count} registros encontrados`;
     pbar.classList.remove("indeterminate");
-    const pct = d.total_changelog ? (d.done_changelog / d.total_changelog * 100) : 0;
+    const pct = total ? (done / total * 100) : 0;
     pbar.style.width = pct + "%";
   }
 
@@ -596,8 +600,8 @@ async function pollProgress() {
     clearInterval(pollTimer);
     pbar.classList.remove("indeterminate");
     pbar.style.width = "100%";
-    phaseTxt.textContent = "✔ Concluído!";
-    loadResults();
+    phaseTxt.textContent = `✔ Concluído — ${d.row_count} registro(s) extraído(s)`;
+    loadResults(d.fields_seen || []);
   } else if (d.status === "error") {
     clearInterval(pollTimer);
     phaseTxt.textContent = "❌ Erro: " + d.error;
@@ -605,7 +609,7 @@ async function pollProgress() {
 }
 
 // ─── Load & render results ───────────────────────────────────────
-async function loadResults() {
+async function loadResults(fieldsSeen) {
   const d = await fetch(`/api/results/${currentJobId}`).then(r => r.json());
   if (!d.ok) return;
 
@@ -616,7 +620,19 @@ async function loadResults() {
   document.getElementById("row-count-label").textContent = `${rows.length} registro(s)`;
 
   if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="no-data">Nenhum registro de changelog encontrado para os filtros selecionados.</td></tr>`;
+    // Show diagnostic: which fields were actually found in changelogs
+    let diagHtml = `<tr><td colspan="9" class="no-data">`;
+    diagHtml += `Nenhum registro encontrado para o campo monitorado.<br/><br/>`;
+    if (fieldsSeen && fieldsSeen.length) {
+      diagHtml += `<span style="font-size:11px;color:var(--muted)">Campos encontrados nos changelogs dessas issues:</span><br/>`;
+      diagHtml += `<span style="font-family:var(--mono);font-size:11px;color:var(--accent)">`;
+      diagHtml += fieldsSeen.map(f => esc(f)).join(" &nbsp;·&nbsp; ");
+      diagHtml += `</span><br/><br/><span style="font-size:11px;color:var(--muted)">Ajuste o campo monitorado acima e tente novamente.</span>`;
+    } else {
+      diagHtml += `<span style="font-size:11px;color:var(--muted)">Nenhum histórico de changelog encontrado nas issues retornadas.</span>`;
+    }
+    diagHtml += `</td></tr>`;
+    tbody.innerHTML = diagHtml;
   } else {
     const cols = ["EPR ID","EPR Title","Current Status","Current Assignee","Author","Date","Field Changed","From","To"];
     rows.forEach(row => {
