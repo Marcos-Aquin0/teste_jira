@@ -124,46 +124,68 @@ def get_changelog_rows(jira: requests.Session, host: str, issue_keys, fields_inc
 
     for idx, key in enumerate(issue_keys):
         try:
-            r = jira.get(
-                f"{host}/rest/api/2/issue/{key}?expand=changelog",
+            # Fetch basic fields first (summary, status, assignee)
+            r0 = jira.get(
+                f"{host}/rest/api/2/issue/{key}",
+                params={"fields": "summary,status,assignee"},
                 timeout=REQUEST_TIMEOUT,
             )
-            if r.status_code != 200:
+            if r0.status_code != 200:
                 if progress_cb:
                     progress_cb("changelog", idx + 1, total)
                 continue
-            data = r.json()
-            issue_fields = data.get("fields", {})
+            issue_fields = r0.json().get("fields", {})
             summary  = issue_fields.get("summary", "")
             status   = (issue_fields.get("status") or {}).get("name", "")
             assignee = (issue_fields.get("assignee") or {}).get("displayName", "")
 
-            for history in data.get("changelog", {}).get("histories", []):
-                author  = history.get("author", {}).get("displayName", "")
-                created = format_brazil_datetime(history.get("created", ""))
-                for item in history.get("items", []):
-                    field_name = item.get("field", "")
-                    all_fields_seen.add(field_name)
-                    # match case-insensitively and also try fieldId
-                    field_id = item.get("fieldId", "")
-                    matched = (
-                        field_name in fields_include
-                        or field_id in fields_include
-                        or field_name.lower() in {f.lower() for f in fields_include}
-                    )
-                    if not matched:
-                        continue
-                    rows.append({
-                        "EPR ID": key,
-                        "EPR Title": summary,
-                        "Current Status": status,
-                        "Current Assignee": assignee,
-                        "Author": author,
-                        "Date": created,
-                        "Field Changed": field_name,
-                        "From": item.get("fromString", "") or item.get("from", ""),
-                        "To":   item.get("toString",   "") or item.get("to",   ""),
-                    })
+            # Paginate through ALL changelog entries
+            cl_start = 0
+            cl_max   = 100
+            while True:
+                rc = jira.get(
+                    f"{host}/rest/api/2/issue/{key}/changelog",
+                    params={"startAt": cl_start, "maxResults": cl_max},
+                    timeout=REQUEST_TIMEOUT,
+                )
+                if rc.status_code != 200:
+                    break
+                cl_data   = rc.json()
+                histories = cl_data.get("values", [])   # dedicated endpoint uses "values"
+                if not histories:
+                    break
+
+                for history in histories:
+                    author  = history.get("author", {}).get("displayName", "")
+                    created = format_brazil_datetime(history.get("created", ""))
+                    for item in history.get("items", []):
+                        field_name = item.get("field", "")
+                        all_fields_seen.add(field_name)
+                        field_id = item.get("fieldId", "")
+                        matched = (
+                            field_name in fields_include
+                            or field_id in fields_include
+                            or field_name.lower() in {f.lower() for f in fields_include}
+                        )
+                        if not matched:
+                            continue
+                        rows.append({
+                            "EPR ID": key,
+                            "EPR Title": summary,
+                            "Current Status": status,
+                            "Current Assignee": assignee,
+                            "Author": author,
+                            "Date": created,
+                            "Field Changed": field_name,
+                            "From": item.get("fromString", "") or item.get("from", ""),
+                            "To":   item.get("toString",   "") or item.get("to",   ""),
+                        })
+
+                cl_start += cl_max
+                cl_total  = cl_data.get("total", 0)
+                if cl_start >= cl_total:
+                    break
+
         except Exception as e:
             job.setdefault("warnings", []).append(f"{key}: {e}")
 
